@@ -879,9 +879,9 @@ static Variant HHVM_FUNCTION(pg_client_encoding, const Resource& connection) {
 }
 
 static bool HHVM_FUNCTION(pg_end_copy, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -889,9 +889,9 @@ static bool HHVM_FUNCTION(pg_end_copy, const Resource& connection) {
 }
 
 static bool HHVM_FUNCTION(pg_put_line, const Resource& connection, const String& query) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
