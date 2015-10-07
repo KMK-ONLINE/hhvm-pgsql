@@ -115,7 +115,7 @@ public:
     static bool IgnoreNotice;
     static bool LogNotice;
 
-    static PGSQL *Get(const Variant& conn_id);
+    static req::ptr<PGSQL> Get(const Variant& conn_id);
 
 public:
     PGSQL(String conninfo);
@@ -159,9 +159,9 @@ public:
 class PGSQLResult : public SweepableResourceData {
     DECLARE_RESOURCE_ALLOCATION(PGSQLResult);
 public:
-    static PGSQLResult *Get(const Variant& result);
+    static req::ptr<PGSQLResult> Get(const Variant& result);
 public:
-    PGSQLResult(PGSQL* conn, PQ::Result res);
+    PGSQLResult(req::ptr<PGSQL> conn, PQ::Result res);
     ~PGSQLResult();
 
     static StaticString s_class_name;
@@ -184,7 +184,7 @@ public:
     Variant getFieldVal(const Variant& row, const Variant& field, const char *fn_name = nullptr);
     String getFieldVal(int row, int field, const char *fn_name = nullptr);
 
-    PGSQL * getConn() { return m_conn; }
+    req::ptr<PGSQL> getConn() { return m_conn; }
 
 public:
     int m_current_row;
@@ -192,7 +192,7 @@ private:
     PQ::Result m_res;
     int m_num_fields;
     int m_num_rows;
-    PGSQL * m_conn;
+    req::ptr<PGSQL> m_conn;
 };
 }
 
@@ -202,12 +202,12 @@ StaticString PGSQL::s_class_name("pgsql connection");
 StaticString PGSQLResult::s_class_name("pgsql result");
 
 
-PGSQL *PGSQL::Get(const Variant& conn_id) {
+req::ptr<PGSQL> PGSQL::Get(const Variant& conn_id) {
     if (conn_id.isNull()) {
         return nullptr;
     }
 
-    PGSQL *pgsql = conn_id.toResource().getTyped<PGSQL>(true, true).get();
+    req::ptr<PGSQL> pgsql = dyn_cast_or_null<PGSQL>(conn_id.toResource());
     return pgsql;
 }
 
@@ -224,7 +224,7 @@ static void notice_processor(PGSQL *pgsql, const char *message) {
 
 void PGSQL::SetupInformation()
 {
-    if (m_conn == nullptr) return;
+    if (!m_conn) return;
 
     m_db = m_conn->db();
     m_user = m_conn->user();
@@ -283,7 +283,7 @@ void PGSQL::sweep() {
 
 void PGSQL::ReleaseConnection()
 {
-    if (m_conn == nullptr) return;
+    if (!m_conn) return;
 
     if (!IsConnectionPooled())
     {
@@ -298,16 +298,16 @@ void PGSQL::ReleaseConnection()
 
 }
 
-PGSQLResult *PGSQLResult::Get(const Variant& result) {
+req::ptr<PGSQLResult> PGSQLResult::Get(const Variant& result) {
     if (result.isNull()) {
         return nullptr;
     }
 
-    auto *res = result.toResource().getTyped<PGSQLResult>(true, true).get();
+    req::ptr<PGSQLResult> res = dyn_cast_or_null<PGSQLResult>(result.toResource());
     return res;
 }
 
-PGSQLResult::PGSQLResult(PGSQL * conn, PQ::Result res)
+PGSQLResult::PGSQLResult(req::ptr<PGSQL> conn, PQ::Result res)
     : m_current_row(0), m_res(std::move(res)),
       m_num_fields(-1), m_num_rows(-1), m_conn(conn) {
     m_conn->incRefCount();
@@ -318,7 +318,6 @@ void PGSQLResult::close() {
 }
 
 PGSQLResult::~PGSQLResult() {
-    m_conn->decRefCount();
     close();
 }
 
@@ -361,7 +360,7 @@ bool PGSQLResult::convertFieldRow(const Variant& row, const Variant& field,
 
     assert(out_row && out_field && "Output parameters cannot be null");
 
-    if (fn_name == nullptr) {
+    if (!fn_name) {
         fn_name = "__internal_pgsql_func";
     }
 
@@ -599,7 +598,7 @@ PGSQLConnectionPool& PGSQLConnectionPoolContainer::GetPool(const std::string con
 
     auto pool = m_pools[connString];
 
-    if (pool == nullptr)
+    if (!pool)
     {
         pool = new PGSQLConnectionPool(connString);
 
@@ -666,12 +665,9 @@ public:
 //////////////////// Connection functions /////////////////////////
 
 static Variant HHVM_FUNCTION(pg_connect, const String& connection_string, int connect_type /* = 0 */) {
-    PGSQL * pgsql = nullptr;
-
-    pgsql = newres<PGSQL>(connection_string);
+    auto pgsql = req::make<PGSQL>(connection_string);
 
     if (!pgsql->get()) {
-        delete pgsql;
         FAIL_RETURN;
     }
     return Resource(pgsql);
@@ -679,23 +675,19 @@ static Variant HHVM_FUNCTION(pg_connect, const String& connection_string, int co
 
 
 static Variant HHVM_FUNCTION(pg_pconnect, const String& connection_string, int connect_type /* = 0 */) {
-    PGSQL * pgsql = nullptr;
-
     PGSQLConnectionPool& pool = s_connectionPoolContainer.GetPool(connection_string.toCppString());
 
-    pgsql = newres<PGSQL>(pool);
+    auto pgsql = req::make<PGSQL>(pool);
 
     if (!pgsql->get()) {
-        delete pgsql;
         FAIL_RETURN;
     }
     return Resource(pgsql);
 }
 
 static bool HHVM_FUNCTION(pg_close, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
     if (pgsql) {
-
         pgsql->ReleaseConnection();
 
         return true;
@@ -705,7 +697,7 @@ static bool HHVM_FUNCTION(pg_close, const Resource& connection) {
 }
 
 static bool HHVM_FUNCTION(pg_ping, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
     if (!pgsql->get()) {
         return false;
@@ -726,7 +718,7 @@ static bool HHVM_FUNCTION(pg_ping, const Resource& connection) {
 }
 
 static bool HHVM_FUNCTION(pg_connection_reset, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
     if (!pgsql->get()) {
         return false;
@@ -800,14 +792,14 @@ static void HHVM_FUNCTION(pg_connection_pool_sweep_free) {
 ///////////// Interrogation Functions ////////////////////
 
 static int64_t HHVM_FUNCTION(pg_connection_status, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) return CONNECTION_BAD;
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) return CONNECTION_BAD;
     return (int64_t)pgsql->get().status();
 }
 
 static bool HHVM_FUNCTION(pg_connection_busy, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         return false;
     }
 
@@ -818,9 +810,9 @@ static bool HHVM_FUNCTION(pg_connection_busy, const Resource& connection) {
 }
 
 static Variant HHVM_FUNCTION(pg_dbname, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -828,9 +820,9 @@ static Variant HHVM_FUNCTION(pg_dbname, const Resource& connection) {
 }
 
 static Variant HHVM_FUNCTION(pg_host, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -838,9 +830,9 @@ static Variant HHVM_FUNCTION(pg_host, const Resource& connection) {
 }
 
 static Variant HHVM_FUNCTION(pg_port, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -853,9 +845,9 @@ static Variant HHVM_FUNCTION(pg_port, const Resource& connection) {
 }
 
 static Variant HHVM_FUNCTION(pg_options, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -863,9 +855,9 @@ static Variant HHVM_FUNCTION(pg_options, const Resource& connection) {
 }
 
 static Variant HHVM_FUNCTION(pg_parameter_status, const Resource& connection, const String& param_name) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         return false;
     }
 
@@ -875,9 +867,9 @@ static Variant HHVM_FUNCTION(pg_parameter_status, const Resource& connection, co
 }
 
 static Variant HHVM_FUNCTION(pg_client_encoding, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -907,9 +899,9 @@ static bool HHVM_FUNCTION(pg_put_line, const Resource& connection, const String&
 }
 
 static int64_t HHVM_FUNCTION(pg_transaction_status, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
+    auto pgsql = PGSQL::Get(connection);
 
-    if (pgsql == nullptr) {
+    if (!pgsql) {
         return PQTRANS_UNKNOWN;
     }
 
@@ -917,8 +909,8 @@ static int64_t HHVM_FUNCTION(pg_transaction_status, const Resource& connection) 
 }
 
 static Variant HHVM_FUNCTION(pg_last_error, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -928,8 +920,8 @@ static Variant HHVM_FUNCTION(pg_last_error, const Resource& connection) {
 }
 
 static Variant HHVM_FUNCTION(pg_last_notice, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -941,8 +933,8 @@ static Variant HHVM_FUNCTION(pg_version, const Resource& connection) {
     static StaticString protocol_key("protocol");
     static StaticString server_key("server");
 
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         FAIL_RETURN;
     }
 
@@ -975,8 +967,8 @@ static Variant HHVM_FUNCTION(pg_version, const Resource& connection) {
 }
 
 static int64_t HHVM_FUNCTION(pg_get_pid, const Resource& connection) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         return -1;
     }
 
@@ -986,8 +978,8 @@ static int64_t HHVM_FUNCTION(pg_get_pid, const Resource& connection) {
 //////////////// Escaping Functions ///////////////////////////
 
 static String HHVM_FUNCTION(pg_escape_bytea, const Resource& connection, const String& data) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         return null_string;
     }
 
@@ -1004,8 +996,8 @@ static String HHVM_FUNCTION(pg_escape_bytea, const Resource& connection, const S
 }
 
 static String HHVM_FUNCTION(pg_escape_identifier, const Resource& connection, const String& data) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         return null_string;
     }
 
@@ -1022,8 +1014,8 @@ static String HHVM_FUNCTION(pg_escape_identifier, const Resource& connection, co
 }
 
 static String HHVM_FUNCTION(pg_escape_literal, const Resource& connection, const String& data) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         return null_string;
     }
 
@@ -1040,8 +1032,8 @@ static String HHVM_FUNCTION(pg_escape_literal, const Resource& connection, const
 }
 
 static String HHVM_FUNCTION(pg_escape_string, const Resource& connection, const String& data) {
-    PGSQL * pgsql = PGSQL::Get(connection);
-    if (pgsql == nullptr) {
+    auto pgsql = PGSQL::Get(connection);
+    if (!pgsql) {
         return null_string;
     }
 
@@ -1072,21 +1064,21 @@ static String HHVM_FUNCTION(pg_unescape_bytea, const String& data) {
 ///////////// Command Execution / Querying /////////////////////////////
 
 static int64_t HHVM_FUNCTION(pg_affected_rows, const Resource& result) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) return 0;
+    auto res = PGSQLResult::Get(result);
+    if (!res) return 0;
 
     return (int64_t)res->get().cmdTuples();
 }
 
 static Variant HHVM_FUNCTION(pg_result_status, const Resource& result, int64_t type /* = PGSQL_STATUS_LONG */) {
-    PGSQLResult *res = PGSQLResult::Get(result);
+    auto res = PGSQLResult::Get(result);
 
     if (type == PGSQL_STATUS_LONG) {
-        if (res == nullptr) return 0;
+        if (!res) return 0;
 
         return (int64_t)res->get().status();
     } else {
-        if (res == nullptr) return null_string;
+        if (!res) return null_string;
 
         String ret(res->get().cmdStatus(), CopyString);
         return ret;
@@ -1094,7 +1086,7 @@ static Variant HHVM_FUNCTION(pg_result_status, const Resource& result, int64_t t
 }
 
 static bool HHVM_FUNCTION(pg_free_result, const Resource& result) {
-    PGSQLResult *res = PGSQLResult::Get(result);
+    auto res = PGSQLResult::Get(result);
     if (res) {
         res->close();
         return true;
@@ -1127,8 +1119,8 @@ static bool _handle_query_result(const char *fn_name, PQ::Connection &conn, PQ::
 }
 
 static Variant HHVM_FUNCTION(pg_query, const Resource& connection, const String& query) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         FAIL_RETURN;
     }
 
@@ -1137,14 +1129,14 @@ static Variant HHVM_FUNCTION(pg_query, const Resource& connection, const String&
     if (_handle_query_result("pg_query", conn->get(), res))
         FAIL_RETURN;
 
-    PGSQLResult *pgresult = newres<PGSQLResult>(conn, std::move(res));
+    auto pgresult = req::make<PGSQLResult>(conn, std::move(res));
 
     return Resource(pgresult);
 }
 
 static Variant HHVM_FUNCTION(pg_query_params, const Resource& connection, const String& query, const Array& params) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         FAIL_RETURN;
     }
 
@@ -1155,14 +1147,14 @@ static Variant HHVM_FUNCTION(pg_query_params, const Resource& connection, const 
     if (_handle_query_result("pg_query_params", conn->get(), res))
         FAIL_RETURN;
 
-    PGSQLResult *pgresult = newres<PGSQLResult>(conn, std::move(res));
+    auto pgresult = req::make<PGSQLResult>(conn, std::move(res));
 
     return Resource(pgresult);
 }
 
 static Variant HHVM_FUNCTION(pg_prepare, const Resource& connection, const String& stmtname, const String& query) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         FAIL_RETURN;
     }
 
@@ -1171,14 +1163,14 @@ static Variant HHVM_FUNCTION(pg_prepare, const Resource& connection, const Strin
     if (_handle_query_result("pg_prepare", conn->get(), res))
         FAIL_RETURN;
 
-    PGSQLResult *pgres = newres<PGSQLResult>(conn, std::move(res));
+    auto pgres = req::make<PGSQLResult>(conn, std::move(res));
 
     return Resource(pgres);
 }
 
 static Variant HHVM_FUNCTION(pg_execute, const Resource& connection, const String& stmtname, const Array& params) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         FAIL_RETURN;
     }
 
@@ -1189,14 +1181,14 @@ static Variant HHVM_FUNCTION(pg_execute, const Resource& connection, const Strin
         FAIL_RETURN;
     }
 
-    PGSQLResult *pgres = newres<PGSQLResult>(conn, std::move(res));
+    auto pgres = req::make<PGSQLResult>(conn, std::move(res));
 
     return Resource(pgres);
 }
 
 static bool HHVM_FUNCTION(pg_send_query, const Resource& connection, const String& query) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         return false;
     }
 
@@ -1232,8 +1224,8 @@ static bool HHVM_FUNCTION(pg_send_query, const Resource& connection, const Strin
 }
 
 static Variant HHVM_FUNCTION(pg_get_result, const Resource& connection) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         FAIL_RETURN;
     }
 
@@ -1243,14 +1235,14 @@ static Variant HHVM_FUNCTION(pg_get_result, const Resource& connection) {
         FAIL_RETURN;
     }
 
-    PGSQLResult *pgresult = newres<PGSQLResult>(conn, std::move(res));
+    auto pgresult = req::make<PGSQLResult>(conn, std::move(res));
 
     return Resource(pgresult);
 }
 
 static bool HHVM_FUNCTION(pg_send_query_params, const Resource& connection, const String& query, const Array& params) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         return false;
     }
 
@@ -1287,8 +1279,8 @@ static bool HHVM_FUNCTION(pg_send_query_params, const Resource& connection, cons
 }
 
 static bool HHVM_FUNCTION(pg_send_prepare, const Resource& connection, const String& stmtname, const String& query) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         return false;
     }
 
@@ -1296,8 +1288,8 @@ static bool HHVM_FUNCTION(pg_send_prepare, const Resource& connection, const Str
 }
 
 static bool HHVM_FUNCTION(pg_send_execute, const Resource& connection, const String& stmtname, const Array& params) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         return false;
     }
 
@@ -1308,8 +1300,8 @@ static bool HHVM_FUNCTION(pg_send_execute, const Resource& connection, const Str
 }
 
 static bool HHVM_FUNCTION(pg_cancel_query, const Resource& connection) {
-    PGSQL *conn = PGSQL::Get(connection);
-    if (conn == nullptr) {
+    auto conn = PGSQL::Get(connection);
+    if (!conn) {
         return false;
     }
 
@@ -1329,8 +1321,8 @@ static bool HHVM_FUNCTION(pg_cancel_query, const Resource& connection) {
 ////////////////////////
 
 static Variant HHVM_FUNCTION(pg_fetch_all_columns, const Resource& result, int64_t column /* = 0 */) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1351,8 +1343,8 @@ static Variant HHVM_FUNCTION(pg_fetch_all_columns, const Resource& result, int64
 }
 
 static Variant HHVM_FUNCTION(pg_fetch_array, const Resource& result, const Variant& row /* = null_variant */, int64_t result_type /* = PGSQL_BOTH */) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1394,8 +1386,8 @@ static Variant HHVM_FUNCTION(pg_fetch_assoc, const Resource& result, const Varia
 }
 
 static Variant HHVM_FUNCTION(pg_fetch_all, const Resource& result) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1414,8 +1406,8 @@ static Variant HHVM_FUNCTION(pg_fetch_all, const Resource& result) {
 }
 
 static Variant HHVM_FUNCTION(pg_fetch_result, const Resource& result, const Variant& row /* = null_variant */, const Variant& field /* = null_variant */) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1429,8 +1421,8 @@ static Variant HHVM_FUNCTION(pg_fetch_row, const Resource& result, const Variant
 ///////////////////// Field information //////////////////////////
 
 static Variant HHVM_FUNCTION(pg_field_is_null, const Resource& result, const Variant& row, const Variant& field /* = null_variant */) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1438,8 +1430,8 @@ static Variant HHVM_FUNCTION(pg_field_is_null, const Resource& result, const Var
 }
 
 static Variant HHVM_FUNCTION(pg_field_name, const Resource& result, int64_t field_number) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1449,7 +1441,7 @@ static Variant HHVM_FUNCTION(pg_field_name, const Resource& result, int64_t fiel
     }
 
     char * name = res->get().fieldName((int)field_number);
-    if (name == nullptr) {
+    if (!name) {
         raise_warning("pg_field_name(): %s", res->get().errorMessage());
         FAIL_RETURN;
     } else {
@@ -1458,8 +1450,8 @@ static Variant HHVM_FUNCTION(pg_field_name, const Resource& result, int64_t fiel
 }
 
 static int64_t HHVM_FUNCTION(pg_field_num, const Resource& result, const String& field_name) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         return -1;
     }
 
@@ -1467,8 +1459,8 @@ static int64_t HHVM_FUNCTION(pg_field_num, const Resource& result, const String&
 }
 
 static Variant HHVM_FUNCTION(pg_field_prtlen, const Resource& result, const Variant& row_number, const Variant& field /* = null_variant */) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1480,8 +1472,8 @@ static Variant HHVM_FUNCTION(pg_field_prtlen, const Resource& result, const Vari
 }
 
 static Variant HHVM_FUNCTION(pg_field_size, const Resource& result, int64_t field_number) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1494,9 +1486,9 @@ static Variant HHVM_FUNCTION(pg_field_size, const Resource& result, int64_t fiel
 }
 
 static Variant HHVM_FUNCTION(pg_field_table, const Resource& result, int64_t field_number, bool oid_only /* = false */) {
-    PGSQLResult *res = PGSQLResult::Get(result);
+    auto res = PGSQLResult::Get(result);
 
-    if (res == nullptr) {
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1523,7 +1515,7 @@ static Variant HHVM_FUNCTION(pg_field_table, const Resource& result, int64_t fie
             FAIL_RETURN;
 
         char * name = name_res.getValue(0, 0);
-        if (name == nullptr) {
+        if (!name) {
             FAIL_RETURN;
         }
 
@@ -1534,9 +1526,9 @@ static Variant HHVM_FUNCTION(pg_field_table, const Resource& result, int64_t fie
 }
 
 static Variant HHVM_FUNCTION(pg_field_type_oid, const Resource& result, int64_t field_number) {
-    PGSQLResult *res = PGSQLResult::Get(result);
+    auto res = PGSQLResult::Get(result);
 
-    if (res == nullptr) {
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1552,9 +1544,9 @@ static Variant HHVM_FUNCTION(pg_field_type_oid, const Resource& result, int64_t 
 
 // TODO: Cache the results of this function somewhere
 static Variant HHVM_FUNCTION(pg_field_type, const Resource& result, int64_t field_number) {
-    PGSQLResult *res = PGSQLResult::Get(result);
+    auto res = PGSQLResult::Get(result);
 
-    if (res == nullptr) {
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1578,7 +1570,7 @@ static Variant HHVM_FUNCTION(pg_field_type, const Resource& result, int64_t fiel
         FAIL_RETURN;
 
     char * name = name_res.getValue(0, 0);
-    if (name == nullptr)
+    if (!name)
         FAIL_RETURN;
 
     String ret(name, CopyString);
@@ -1587,8 +1579,8 @@ static Variant HHVM_FUNCTION(pg_field_type, const Resource& result, int64_t fiel
 }
 
 static int64_t HHVM_FUNCTION(pg_num_fields, const Resource& result) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         return -1;
     }
 
@@ -1596,8 +1588,8 @@ static int64_t HHVM_FUNCTION(pg_num_fields, const Resource& result) {
 }
 
 static int64_t HHVM_FUNCTION(pg_num_rows, const Resource& result) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         return -1;
     }
 
@@ -1605,8 +1597,8 @@ static int64_t HHVM_FUNCTION(pg_num_rows, const Resource& result) {
 }
 
 static Variant HHVM_FUNCTION(pg_result_error_field, const Resource& result, int64_t fieldcode) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1619,8 +1611,8 @@ static Variant HHVM_FUNCTION(pg_result_error_field, const Resource& result, int6
 }
 
 static Variant HHVM_FUNCTION(pg_result_error, const Resource& result) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
@@ -1633,8 +1625,8 @@ static Variant HHVM_FUNCTION(pg_result_error, const Resource& result) {
 }
 
 static bool HHVM_FUNCTION(pg_result_seek, const Resource& result, int64_t offset) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         return false;
     }
 
@@ -1648,8 +1640,8 @@ static bool HHVM_FUNCTION(pg_result_seek, const Resource& result, int64_t offset
 }
 
 static Variant HHVM_FUNCTION(pg_last_oid, const Resource& result) {
-    PGSQLResult *res = PGSQLResult::Get(result);
-    if (res == nullptr) {
+    auto res = PGSQLResult::Get(result);
+    if (!res) {
         FAIL_RETURN;
     }
 
