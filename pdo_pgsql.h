@@ -8,7 +8,7 @@ namespace HPHP {
 struct PDOPgSql : public PDODriver {
     PDOPgSql();
     virtual req::ptr<PDOResource> createResourceImpl() override;
-    virtual req::ptr<PDOResource> createResource(const sp_PDOConnection& conn) override;
+    virtual req::ptr<PDOResource> createResourceImpl(const sp_PDOConnection& conn) override;
 };
 
 long pdo_attr_lval(const Array& options, int opt, long defaultValue);

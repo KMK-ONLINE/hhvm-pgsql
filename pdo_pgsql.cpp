@@ -17,7 +17,7 @@ req::ptr<PDOResource> PDOPgSql::createResourceImpl() {
     return req::make<PDOPgSqlResource>(std::make_shared<PDOPgSqlConnection>());
 }
 
-req::ptr<PDOResource> PDOPgSql::createResource(const sp_PDOConnection& conn) {
+req::ptr<PDOResource> PDOPgSql::createResourceImpl(const sp_PDOConnection& conn) {
     return req::make<PDOPgSqlResource>(
         std::dynamic_pointer_cast<PDOPgSqlConnection>(conn)
     );
