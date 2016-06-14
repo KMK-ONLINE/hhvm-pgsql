@@ -3,7 +3,8 @@
 
 #include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/ext/pdo/pdo_driver.h"
-
+#include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/array-data.h"
 namespace HPHP {
 struct PDOPgSql : public PDODriver {
     PDOPgSql();
